@@ -1,0 +1,17 @@
+{
+    "name": "joe/stocktrading",
+    "description": "Stock Trading Application",
+    "require": {
+        "php": ">=7.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Stocktrading\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Suresh"
+        }
+    ]
+}
