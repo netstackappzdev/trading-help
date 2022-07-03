@@ -1,42 +1,65 @@
 <?php
-//require_once(__DIR__.'/vendor/autoload.php');
+require_once(__DIR__.'/vendor/autoload.php');
 
-//use StockTrading\Application;
+use Stocktrading\Application;
+use Stocktrading\Validator;
 
-$tmpName = $_FILES['stockFile']['tmp_name'];
-$csvAsArray = array_map('str_getcsv', file($tmpName));
+//$csvAsArray = array_map('str_getcsv', file($tmpName));
 
-//doValidation($_REQUEST);
-
-$CSVdata = CSVToArray($tmpName);
-$finalStockList = init($CSVdata,$_REQUEST);
-
-$stockCount = count($finalStockList);
-$msg = '';
-$reports = array();
-if($stockCount<=1){
-    $msg = "Wer't finding any trade available for the selected date.";
-} else {
-    //$reports = profitCalculation($finalStockList);
-    $reports = doCalculation($finalStockList);
-}
-
-$return = array(
-    'buy-date'  => '', // day you should've bought, so it price should be low
-    'sell-date' => '', // day you should've sold, so its price should be high so you make profit
-    'profit'    => '',  // value of profit
-    //'request'   => $_REQUEST,
-    //'file'      => $csvAsArray,
-    //'arr'       => $arr,
-    'reports'   => $reports,
-    'msg'       => $msg,
-);
+$output = init($_REQUEST,$_FILES);
 
 //header('Content-Type: application/json; charset=utf-8');
-echo json_encode($return);
+echo json_encode($output);
 
-function doValidation($request){
-    //throw new Exception("Value must be 1 or below");
+
+function init($request,$files){
+    $msg = doValidation($request,$files);
+    $stockPrices = array();
+    if(empty($msg)){
+        $stockCSVTmpName = $files['stockFile']['tmp_name'];
+        $data = CSVToArray($stockCSVTmpName);
+        if(isset($data[$request['stockName']])){
+            $stockPrices = $data[$request['stockName']];    
+            array_multisort(array_map(function($element) {        
+                return $element['date'];
+            }, $stockPrices), SORT_ASC, $stockPrices);  
+            
+            $app = new Application();
+            $stockPrices = $app->init($stockPrices,$request['stockStartDate'],$request['stockEndDate']);
+        }
+    }
+    return array(
+        'reports'   => $stockPrices,
+        'msg'       => $msg,
+    );
+}
+
+function doValidation($request,$files){
+    $msg = '';
+    if(!Validator::validateDate($request['stockStartDate'])){
+        $msg .= "Start Date is not valid. </br>";
+    }
+    if(!Validator::validateDate($request['stockEndDate'])){
+        $msg .= "End Date is not valid. </br>";
+    }
+    $csv_mimetypes = array(
+        'text/csv'
+    );    
+    if (!in_array($files['stockFile']['type'], $csv_mimetypes)) {
+        $msg .=  "File must be valid CSV file. </br>";
+    }
+    if(empty($request['stockName'])){
+        $msg .=  "Valid stock name is required. </br>";
+    }
+    if(isset($request['stockName'])){
+        $peopleJson = file_get_contents('nasdaq-listed.json'); 
+        $decodedJson = json_decode($peopleJson, false);
+        $key = array_search($request['stockName'], array_column($decodedJson, 'Symbol'));
+        if(empty($key)){
+            $msg .=  "Choose a Valid Stock.</br>";
+        }
+    }
+    return $msg;    
 }
 
 function CSVToArray($filename='', $delimiter=',') {
@@ -64,118 +87,5 @@ function CSVToArray($filename='', $delimiter=',') {
     }
     return $data;
 }
-
-function init($data,$request){
-    $stockPrices = array();
-    if(isset($data[$request['stockName']])){
-        $stockPrices = $data[$request['stockName']];    
-        array_multisort(array_map(function($element) {        
-            return $element['date'];
-        }, $stockPrices), SORT_ASC, $stockPrices);  
-        
-        //$app= new Application();
-        $stockPrices = isProcessed($stockPrices,$request['stockStartDate'],$request['stockEndDate']);
-    }
-    return $stockPrices;
-}
-
-function isProcessed($stocks,$startDate,$endDate){
-
-    $startDateFormated = date('Y-m-d', strtotime($startDate));
-    $endDateFormated = date('Y-m-d', strtotime($endDate));
-
-    $result = array();
-    foreach($stocks as $element){
-        $dateFormated=date('Y-m-d', strtotime($element['date']));
-            
-        // Check if date is between two dates
-        if (($dateFormated >= $startDateFormated) && ($dateFormated <= $endDateFormated)){
-            $result[] = $element;
-        }
-    }
-    return $result;
-}
-
-function doCalculation($stocks){
-    $tradingDates=array();
-    $buyDate= $sellDate = '';
-    $localMinima=max(array_column($stocks, 'price'));
-    $localMaxima=min(array_column($stocks, 'price'));
-    $mean= $meanforVariance= $standardDeviation= $stockCount = $totalProfit = $variance= 0;
-    $status='recent_lowest_trade_price';  //recent_Highest_trade_price find_profit
-
-    foreach($stocks as $item){
-
-        $mean+=$item['price'];
-        $stockCount++;
-        $delta=$item['price']-$meanforVariance;
-        $meanforVariance+=$delta/$stockCount;
-        $variance+=$delta*($item['price']-$meanforVariance);
-
-        if($status=='recent_lowest_trade_price'){
-            if($localMinima>$item['price']){
-                $localMinima=$item['price'];
-                $buyDate=$item['date'];
-                // echo "local_minima $localMinima $buyDate <br/>";
-            }else{
-                $status='recent_Highest_trade_price';
-            }
-        }
-
-        if($status=='recent_Highest_trade_price'){
-            if($localMaxima<$item['price']){
-                $localMaxima=$item['price'];
-                $sellDate=$item['date'];
-                //echo "recent_Highest_trade_price $localMinima $buyDate <br/>";
-            }else{
-                $status='find_profit';
-            }
-        }
-
-        if($status=='find_profit'){
-            $profit=$localMaxima-$localMinima;
-            $totalProfit+=$profit;
-            array_push($tradingDates,[
-                'buy_date'=>$buyDate,
-                'sell_date'=>$sellDate,
-                'profit'=>$profit
-            ]);
-            $localMinima=$item['price'];
-            $buyDate=$item['date'];
-            $localMaxima=min(array_column($stocks, 'price'));
-            $status='recent_lowest_trade_price';
-        }
-    }
-    
-
-    if($status=='recent_Highest_trade_price'){
-        $profit=$localMaxima-$localMinima;
-        $totalProfit+=$profit;
-        array_push($tradingDates,[
-            'buy_date'=>$buyDate,
-            'sell_date'=>$sellDate,
-            'profit'=>$profit
-        ]);
-    }
-
-    if($stockCount>0){
-        $mean=$mean/$stockCount;
-    }
-
-    if($stockCount>1){
-        $variance=$variance/($stockCount-1);
-        $standardDeviation=sqrt($variance);
-    }
-
-
-    return [
-        'mean'=>$mean,
-        'standard_deviation'=>$standardDeviation,
-        'total_profit'=>$totalProfit,
-        'trading_dates'=>$tradingDates
-    ];
-}
-
-
 
 ?>
